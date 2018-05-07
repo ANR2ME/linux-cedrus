@@ -20,6 +20,7 @@
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/videodev2.h>
+#include <media/media-request.h>
 
 /* forward references */
 struct file;
@@ -247,6 +248,14 @@ struct v4l2_ctrl {
  * @ctrl:	The actual control information.
  * @helper:	Pointer to helper struct. Used internally in
  *		``prepare_ext_ctrls`` function at ``v4l2-ctrl.c``.
+ * @from_other_dev: If true, then @ctrl was defined in another
+ *		device than the &struct v4l2_ctrl_handler.
+ * @done:	If true, then this control reference is part of a
+ *		control cluster that was already set while applying
+ *		the controls in this media request object.
+ * @req:	If set, this refers to another request that sets this control.
+ * @p_req:	The request value. Only used if the control handler
+ *		is bound to a media request.
  *
  * Each control handler has a list of these refs. The list_head is used to
  * keep a sorted-by-control-ID list of all controls, while the next pointer
@@ -257,6 +266,10 @@ struct v4l2_ctrl_ref {
 	struct v4l2_ctrl_ref *next;
 	struct v4l2_ctrl *ctrl;
 	struct v4l2_ctrl_helper *helper;
+	bool from_other_dev;
+	bool done;
+	struct v4l2_ctrl_ref *req;
+	union v4l2_ctrl_ptr p_req;
 };
 
 /**
@@ -280,6 +293,17 @@ struct v4l2_ctrl_ref {
  * @notify_priv: Passed as argument to the v4l2_ctrl notify callback.
  * @nr_of_buckets: Total number of buckets in the array.
  * @error:	The error code of the first failed control addition.
+ * @request_is_queued: True if the request was queued.
+ * @requests:	List to keep track of open control handler request objects.
+ *		For the parent control handler (@req_obj.req == NULL) this
+ *		is the list header. When the parent control handler is
+ *		removed, it has to unbind and put all these requests since
+ *		they refer to the parent.
+ * @requests_queued: List of the queued requests. This determines the order
+ *		in which these controls are applied. Once the request is
+ *		completed it is removed from this list.
+ * @req_obj:	The &struct media_request_object, used to link into a
+ *		&struct media_request.
  */
 struct v4l2_ctrl_handler {
 	struct mutex _lock;
@@ -292,6 +316,10 @@ struct v4l2_ctrl_handler {
 	void *notify_priv;
 	u16 nr_of_buckets;
 	int error;
+	bool request_is_queued;
+	struct list_head requests;
+	struct list_head requests_queued;
+	struct media_request_object req_obj;
 };
 
 /**
@@ -633,6 +661,8 @@ typedef bool (*v4l2_ctrl_filter)(const struct v4l2_ctrl *ctrl);
  * @add:	The control handler whose controls you want to add to
  *		the @hdl control handler.
  * @filter:	This function will filter which controls should be added.
+ * @from_other_dev: If true, then the controls in @add were defined in another
+ *		device than @hdl.
  *
  * Does nothing if either of the two handlers is a NULL pointer.
  * If @filter is NULL, then all controls are added. Otherwise only those
@@ -642,7 +672,8 @@ typedef bool (*v4l2_ctrl_filter)(const struct v4l2_ctrl *ctrl);
  */
 int v4l2_ctrl_add_handler(struct v4l2_ctrl_handler *hdl,
 			  struct v4l2_ctrl_handler *add,
-			  v4l2_ctrl_filter filter);
+			  v4l2_ctrl_filter filter,
+			  bool from_other_dev);
 
 /**
  * v4l2_ctrl_radio_filter() - Standard filter for radio controls.
@@ -1046,6 +1077,11 @@ int v4l2_ctrl_subscribe_event(struct v4l2_fh *fh,
  */
 __poll_t v4l2_ctrl_poll(struct file *file, struct poll_table_struct *wait);
 
+void v4l2_ctrl_request_setup(struct media_request *req,
+			     struct v4l2_ctrl_handler *hdl);
+void v4l2_ctrl_request_complete(struct media_request *req,
+				struct v4l2_ctrl_handler *hdl);
+
 /* Helpers for ioctl_ops */
 
 /**
@@ -1112,11 +1148,12 @@ int v4l2_s_ctrl(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
  *	:ref:`VIDIOC_G_EXT_CTRLS <vidioc_g_ext_ctrls>` ioctl
  *
  * @hdl: pointer to &struct v4l2_ctrl_handler
+ * @mdev: pointer to &struct media_device
  * @c: pointer to &struct v4l2_ext_controls
  *
  * If hdl == NULL then they will all return -EINVAL.
  */
-int v4l2_g_ext_ctrls(struct v4l2_ctrl_handler *hdl,
+int v4l2_g_ext_ctrls(struct v4l2_ctrl_handler *hdl, struct media_device *mdev,
 		     struct v4l2_ext_controls *c);
 
 /**
@@ -1124,11 +1161,13 @@ int v4l2_g_ext_ctrls(struct v4l2_ctrl_handler *hdl,
  *	:ref:`VIDIOC_TRY_EXT_CTRLS <vidioc_g_ext_ctrls>` ioctl
  *
  * @hdl: pointer to &struct v4l2_ctrl_handler
+ * @mdev: pointer to &struct media_device
  * @c: pointer to &struct v4l2_ext_controls
  *
  * If hdl == NULL then they will all return -EINVAL.
  */
 int v4l2_try_ext_ctrls(struct v4l2_ctrl_handler *hdl,
+		       struct media_device *mdev,
 		       struct v4l2_ext_controls *c);
 
 /**
@@ -1137,11 +1176,13 @@ int v4l2_try_ext_ctrls(struct v4l2_ctrl_handler *hdl,
  *
  * @fh: pointer to &struct v4l2_fh
  * @hdl: pointer to &struct v4l2_ctrl_handler
+ * @mdev: pointer to &struct media_device
  * @c: pointer to &struct v4l2_ext_controls
  *
  * If hdl == NULL then they will all return -EINVAL.
  */
 int v4l2_s_ext_ctrls(struct v4l2_fh *fh, struct v4l2_ctrl_handler *hdl,
+		     struct media_device *mdev,
 		     struct v4l2_ext_controls *c);
 
 /**

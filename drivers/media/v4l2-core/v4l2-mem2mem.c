@@ -20,6 +20,7 @@
 #include <media/videobuf2-v4l2.h>
 #include <media/v4l2-mem2mem.h>
 #include <media/v4l2-dev.h>
+#include <media/v4l2-device.h>
 #include <media/v4l2-fh.h>
 #include <media/v4l2-event.h>
 
@@ -388,12 +389,13 @@ EXPORT_SYMBOL_GPL(v4l2_m2m_querybuf);
 int v4l2_m2m_qbuf(struct file *file, struct v4l2_m2m_ctx *m2m_ctx,
 		  struct v4l2_buffer *buf)
 {
+	struct video_device *vdev = video_devdata(file);
 	struct vb2_queue *vq;
 	int ret;
 
 	vq = v4l2_m2m_get_vq(m2m_ctx, buf->type);
-	ret = vb2_qbuf(vq, buf);
-	if (!ret)
+	ret = vb2_qbuf(vq, vdev->v4l2_dev->mdev, buf);
+	if (!ret && !(buf->flags & V4L2_BUF_FLAG_IN_REQUEST))
 		v4l2_m2m_try_schedule(m2m_ctx);
 
 	return ret;
@@ -413,12 +415,13 @@ EXPORT_SYMBOL_GPL(v4l2_m2m_dqbuf);
 int v4l2_m2m_prepare_buf(struct file *file, struct v4l2_m2m_ctx *m2m_ctx,
 			 struct v4l2_buffer *buf)
 {
+	struct video_device *vdev = video_devdata(file);
 	struct vb2_queue *vq;
 	int ret;
 
 	vq = v4l2_m2m_get_vq(m2m_ctx, buf->type);
-	ret = vb2_prepare_buf(vq, buf);
-	if (!ret)
+	ret = vb2_prepare_buf(vq, vdev->v4l2_dev->mdev, buf);
+	if (!ret && !(buf->flags & V4L2_BUF_FLAG_IN_REQUEST))
 		v4l2_m2m_try_schedule(m2m_ctx);
 
 	return ret;
@@ -697,6 +700,35 @@ void v4l2_m2m_buf_queue(struct v4l2_m2m_ctx *m2m_ctx,
 	spin_unlock_irqrestore(&q_ctx->rdy_spinlock, flags);
 }
 EXPORT_SYMBOL_GPL(v4l2_m2m_buf_queue);
+
+void vb2_m2m_request_queue(struct media_request *req)
+{
+	struct media_request_object *obj;
+
+	list_for_each_entry(obj, &req->objects, list) {
+		struct v4l2_m2m_ctx *m2m_ctx;
+		struct vb2_buffer *vb;
+
+		if (!obj->ops->queue)
+			continue;
+
+		obj->ops->queue(obj);
+		if (!vb2_request_object_is_buffer(obj))
+			continue;
+
+		vb = container_of(obj, struct vb2_buffer, req_obj);
+		if (V4L2_TYPE_IS_OUTPUT(vb->vb2_queue->type))
+			m2m_ctx = container_of(vb->vb2_queue,
+					       struct v4l2_m2m_ctx,
+					       out_q_ctx.q);
+		else
+			m2m_ctx = container_of(vb->vb2_queue,
+					       struct v4l2_m2m_ctx,
+					       cap_q_ctx.q);
+		v4l2_m2m_try_schedule(m2m_ctx);
+	}
+}
+EXPORT_SYMBOL_GPL(vb2_m2m_request_queue);
 
 /* Videobuf2 ioctl helpers */
 

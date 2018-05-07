@@ -62,10 +62,11 @@ config VIDEO_MUX
 
 config VIDEO_OMAP3
 	tristate "OMAP 3 Camera support"
-	depends on VIDEO_V4L2 && I2C && VIDEO_V4L2_SUBDEV_API && ARCH_OMAP3
+	depends on VIDEO_V4L2 && I2C && VIDEO_V4L2_SUBDEV_API
+	depends on (ARCH_OMAP3 && OMAP_IOMMU) || COMPILE_TEST
+	depends on COMMON_CLK
 	depends on HAS_DMA && OF
-	depends on OMAP_IOMMU
-	select ARM_DMA_USE_IOMMU
+	select ARM_DMA_USE_IOMMU if OMAP_IOMMU
 	select VIDEOBUF2_DMA_CONTIG
 	select MFD_SYSCON
 	select V4L2_FWNODE
@@ -474,6 +475,21 @@ config VIDEO_TI_VPE
 	---help---
 	  Support for the TI VPE(Video Processing Engine) block
 	  found on DRA7XX SoC.
+
+config VIDEO_SUNXI_CEDRUS
+	tristate "Sunxi-Cedrus VPU driver"
+	depends on VIDEO_DEV && VIDEO_V4L2 && MEDIA_CONTROLLER
+	depends on ARCH_SUNXI
+	depends on HAS_DMA
+	select VIDEOBUF2_DMA_CONTIG
+	select MEDIA_REQUEST_API
+	select V4L2_MEM2MEM_DEV
+	---help---
+	  Support for the VPU found in Allwinner SoCs, also known as the Cedar
+	  video engine.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called sunxi-cedrus.
 
 config VIDEO_TI_VPE_DEBUG
 	bool "VPE debug messages"
